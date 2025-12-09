@@ -42,6 +42,7 @@ A full-featured news posting and content management platform built with PHP, MyS
 - Architecture: MVC-inspired structure with separation of concerns
 
 **📁 Project Structure**
+```
 np/
 ├── admin/           # Admin panel and management interfaces
 ├── user/            # User dashboard and interfaces
@@ -50,6 +51,7 @@ np/
 ├── includes/        # Core functions and session management
 ├── docs/            # Documentation
 └── index.php        # Login/registration entry point
+```
 
 **🚀 Features in Detail**
 **Post Scheduling:** Schedule announcements and posts for future publication with automatic visibility control

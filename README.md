@@ -47,9 +47,9 @@ np/
 ├── admin/           # Admin panel and management interfaces
 ├── user/            # User dashboard and interfaces
 ├── assets/          
-│   ├── css/        # Stylesheets
-│   ├── img/        # Static images
-│   └── uploads/    # User-uploaded images
+│   ├── css/         # Stylesheets
+│   ├── img/         # Static images
+│   └── uploads/     # User-uploaded images
 ├── config/          # Database configuration
 ├── includes/        # Core functions and session management
 ├── database/        # Database files

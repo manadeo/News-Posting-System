@@ -46,11 +46,16 @@ A full-featured news posting and content management platform built with PHP, MyS
 np/
 ├── admin/           # Admin panel and management interfaces
 ├── user/            # User dashboard and interfaces
-├── assets/          # CSS, JavaScript, and uploaded images
+├── assets/          
+│   ├── css/        # Stylesheets
+│   ├── img/        # Static images
+│   └── uploads/    # User-uploaded images
 ├── config/          # Database configuration
 ├── includes/        # Core functions and session management
+├── database/        # Database files
 ├── docs/            # Documentation
-└── index.php        # Login/registration entry point
+├── index.php        # Login/registration entry point
+└── logout.php       # Logout handler
 ```
 
 # 🚀 Features in Detail

@@ -53,7 +53,7 @@ np/
 
 **🚀 Features in Detail**
 **Post Scheduling:** Schedule announcements and posts for future publication with automatic visibility control
-Content Filtering: Built-in harmful content detection to maintain community standards
+**Content Filtering:** Built-in harmful content detection to maintain community standards
 
 **Responsive Design:** Modern, clean UI with smooth animations and user-friendly interactions
 

@@ -1,0 +1,480 @@
+<?php
+require_once __DIR__ . '/../config/database.php';
+
+// Sanitize input
+function sanitize($data) {
+    return htmlspecialchars(strip_tags(trim($data)));
+}
+
+// Login user
+function loginUser($username, $password) {
+    $conn = getDBConnection();
+    $username = sanitize($username);
+    
+    $stmt = $conn->prepare("SELECT id, username, email, password, role FROM users WHERE username = ? OR email = ?");
+    $stmt->execute([$username, $username]);
+    $user = $stmt->fetch();
+    
+    if ($user && password_verify($password, $user['password'])) {
+        $_SESSION['user_id'] = $user['id'];
+        $_SESSION['username'] = $user['username'];
+        $_SESSION['email'] = $user['email'];
+        $_SESSION['role'] = $user['role'];
+        return true;
+    }
+    
+    return false;
+}
+
+// Register user
+function registerUser($username, $email, $password) {
+    $conn = getDBConnection();
+    $username = sanitize($username);
+    $email = sanitize($email);
+    $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+    
+    try {
+        $stmt = $conn->prepare("INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, 'user')");
+        $stmt->execute([$username, $email, $hashedPassword]);
+        return true;
+    } catch (PDOException $e) {
+        return false;
+    }
+}
+
+// Get all posts (with filters)
+function getPosts($status = null, $userId = null, $limit = null) {
+    $conn = getDBConnection();
+    
+    $sql = "SELECT p.*, u.username FROM posts p 
+            JOIN users u ON p.user_id = u.id 
+            WHERE 1=1";
+    
+    $params = [];
+    
+    if ($status) {
+        $sql .= " AND p.status = ?";
+        $params[] = $status;
+    }
+    
+    if ($userId) {
+        $sql .= " AND p.user_id = ?";
+        $params[] = $userId;
+    }
+    
+    $sql .= " ORDER BY p.created_at DESC";
+    
+    if ($limit) {
+        $sql .= " LIMIT ?";
+        $params[] = (int)$limit;
+    }
+    
+    $stmt = $conn->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
+}
+
+// Get single post
+function getPost($postId) {
+    $conn = getDBConnection();
+    $stmt = $conn->prepare("SELECT p.*, u.username FROM posts p 
+                           JOIN users u ON p.user_id = u.id 
+                           WHERE p.id = ?");
+    $stmt->execute([$postId]);
+    return $stmt->fetch();
+}
+
+// Create post
+function createPost($userId, $title, $content, $imagePath = null) {
+    $conn = getDBConnection();
+    $title = sanitize($title);
+    $content = sanitize($content);
+    
+    $stmt = $conn->prepare("INSERT INTO posts (user_id, title, content, image_path, status) VALUES (?, ?, ?, ?, 'pending')");
+    $stmt->execute([$userId, $title, $content, $imagePath]);
+    
+    return $stmt->rowCount() > 0;
+}
+
+// Update post status
+function updatePostStatus($postId, $status) {
+    $conn = getDBConnection();
+    $stmt = $conn->prepare("UPDATE posts SET status = ? WHERE id = ?");
+    $stmt->execute([$status, $postId]);
+    return $stmt->rowCount() > 0;
+}
+
+// Delete post
+function deletePost($postId, $userId = null, $isAdmin = false) {
+    $conn = getDBConnection();
+    
+    // Get post to check ownership and delete image
+    $post = getPost($postId);
+    
+    if (!$post) {
+        return false;
+    }
+    
+    // Check permissions
+    if (!$isAdmin && $post['user_id'] != $userId) {
+        return false;
+    }
+    
+    // Delete image file if exists
+    if ($post['image_path'] && file_exists(__DIR__ . '/../' . $post['image_path'])) {
+        unlink(__DIR__ . '/../' . $post['image_path']);
+    }
+    
+    $stmt = $conn->prepare("DELETE FROM posts WHERE id = ?");
+    $stmt->execute([$postId]);
+    return $stmt->rowCount() > 0;
+}
+
+// Upload image
+function uploadImage($file) {
+    $targetDir = __DIR__ . "/../assets/uploads/";
+    
+    // Create directory if it doesn't exist
+    if (!file_exists($targetDir)) {
+        mkdir($targetDir, 0777, true);
+    }
+    
+    $fileExtension = strtolower(pathinfo($file["name"], PATHINFO_EXTENSION));
+    $allowedExtensions = array("jpg", "jpeg", "png", "gif");
+    
+    if (!in_array($fileExtension, $allowedExtensions)) {
+        return false;
+    }
+    
+    // Generate unique filename
+    $newFileName = uniqid() . '_' . time() . '.' . $fileExtension;
+    $targetFile = $targetDir . $newFileName;
+    
+    if (move_uploaded_file($file["tmp_name"], $targetFile)) {
+        return "assets/uploads/" . $newFileName;
+    }
+    
+    return false;
+}
+
+// Get stats for admin dashboard
+function getStats() {
+    $conn = getDBConnection();
+    
+    $stats = array();
+    
+    // Total users
+    $stmt = $conn->query("SELECT COUNT(*) as count FROM users WHERE role = 'user'");
+    $result = $stmt->fetch();
+    $stats['total_users'] = $result['count'];
+    
+    // Total posts
+    $stmt = $conn->query("SELECT COUNT(*) as count FROM posts");
+    $result = $stmt->fetch();
+    $stats['total_posts'] = $result['count'];
+    
+    // Pending posts
+    $stmt = $conn->query("SELECT COUNT(*) as count FROM posts WHERE status = 'pending'");
+    $result = $stmt->fetch();
+    $stats['pending_posts'] = $result['count'];
+    
+    // Approved posts
+    $stmt = $conn->query("SELECT COUNT(*) as count FROM posts WHERE status = 'approved'");
+    $result = $stmt->fetch();
+    $stats['approved_posts'] = $result['count'];
+    
+    return $stats;
+}
+
+// Format time ago  
+function timeAgo($datetime) {
+    //Set timezone to Philippines
+    date_default_timezone_set('Asia/Manila');
+    
+    $timestamp = strtotime($datetime);
+    $current = time();
+    $diff = $current - $timestamp;
+    
+    // Handle negative time differences (future dates due to timezone issues)
+    if ($diff < 0) {
+        $diff = abs($diff);
+        // If it's a small negative difference, just show "Just now"
+        if ($diff < 300) { // Less than 5 minutes in the future
+            return "Just now";
+        }
+    }
+    
+    // Show "Just now" for very recent posts
+    if ($diff < 10) {
+        return "Just now";
+    } elseif ($diff < 60) {
+        return $diff . " seconds ago";
+    } elseif ($diff < 3600) {
+        $minutes = floor($diff / 60);
+        return $minutes . ($minutes == 1 ? " minute ago" : " minutes ago");
+    } elseif ($diff < 86400) {
+        $hours = floor($diff / 3600);
+        return $hours . ($hours == 1 ? " hour ago" : " hours ago");
+    } elseif ($diff < 604800) {
+        $days = floor($diff / 86400);
+        return $days . ($days == 1 ? " day ago" : " days ago");
+    } elseif ($diff < 2592000) {
+        $weeks = floor($diff / 604800);
+        return $weeks . ($weeks == 1 ? " week ago" : " weeks ago");
+    } else {
+        return date('M d, Y', $timestamp);
+    }
+}
+
+// ========== COMMENT FUNCTIONS ==========
+
+// Create comment
+function createComment($postId, $userId, $comment) {
+    $conn = getDBConnection();
+    $comment = sanitize($comment);
+    
+    $stmt = $conn->prepare("INSERT INTO comments (post_id, user_id, comment) VALUES (?, ?, ?)");
+    $stmt->execute([$postId, $userId, $comment]);
+    
+    return $stmt->rowCount() > 0;
+}
+
+// Get comments for a post
+function getComments($postId) {
+    $conn = getDBConnection();
+    
+    $stmt = $conn->prepare("SELECT c.*, u.username FROM comments c 
+                           JOIN users u ON c.user_id = u.id 
+                           WHERE c.post_id = ? 
+                           ORDER BY c.created_at DESC");
+    $stmt->execute([$postId]);
+    return $stmt->fetchAll();
+}
+
+// Delete comment
+function deleteComment($commentId, $userId = null, $isAdmin = false) {
+    $conn = getDBConnection();
+    
+    // Get comment to check ownership
+    $stmt = $conn->prepare("SELECT user_id FROM comments WHERE id = ?");
+    $stmt->execute([$commentId]);
+    $comment = $stmt->fetch();
+    
+    if (!$comment) {
+        return false;
+    }
+    
+    // Check permissions - admin can delete any, user can only delete own
+    if (!$isAdmin && $comment['user_id'] != $userId) {
+        return false;
+    }
+    
+    $stmt = $conn->prepare("DELETE FROM comments WHERE id = ?");
+    $stmt->execute([$commentId]);
+    return $stmt->rowCount() > 0;
+}
+
+// Get comment count for a post
+function getCommentCount($postId) {
+    $conn = getDBConnection();
+    
+
+// Create post
+function createPost($userId, $title, $content, $imagePath = null) {
+    $conn = getDBConnection();
+    $title = sanitize($title);
+    $content = sanitize($content);
+    
+    $stmt = $conn->prepare("INSERT INTO posts (user_id, title, content, image_path, status) VALUES (?, ?, ?, ?, 'pending')");
+    $stmt->execute([$userId, $title, $content, $imagePath]);
+    
+    return $stmt->rowCount() > 0;
+}
+
+// Update post status
+function updatePostStatus($postId, $status) {
+    $conn = getDBConnection();
+    $stmt = $conn->prepare("UPDATE posts SET status = ? WHERE id = ?");
+    $stmt->execute([$status, $postId]);
+    return $stmt->rowCount() > 0;
+}
+
+// Delete post
+function deletePost($postId, $userId = null, $isAdmin = false) {
+    $conn = getDBConnection();
+    
+    // Get post to check ownership and delete image
+    $post = getPost($postId);
+    
+    if (!$post) {
+        return false;
+    }
+    
+    // Check permissions
+    if (!$isAdmin && $post['user_id'] != $userId) {
+        return false;
+    }
+    
+    // Delete image file if exists
+    if ($post['image_path'] && file_exists(__DIR__ . '/../' . $post['image_path'])) {
+        unlink(__DIR__ . '/../' . $post['image_path']);
+    }
+    
+    $stmt = $conn->prepare("DELETE FROM posts WHERE id = ?");
+    $stmt->execute([$postId]);
+    return $stmt->rowCount() > 0;
+}
+
+// Upload image
+function uploadImage($file) {
+    $targetDir = __DIR__ . "/../assets/uploads/";
+    
+    // Create directory if it doesn't exist
+    if (!file_exists($targetDir)) {
+        mkdir($targetDir, 0777, true);
+    }
+    
+    $fileExtension = strtolower(pathinfo($file["name"], PATHINFO_EXTENSION));
+    $allowedExtensions = array("jpg", "jpeg", "png", "gif");
+    
+    if (!in_array($fileExtension, $allowedExtensions)) {
+        return false;
+    }
+    
+    // Generate unique filename
+    $newFileName = uniqid() . '_' . time() . '.' . $fileExtension;
+    $targetFile = $targetDir . $newFileName;
+    
+    if (move_uploaded_file($file["tmp_name"], $targetFile)) {
+        return "assets/uploads/" . $newFileName;
+    }
+    
+    return false;
+}
+
+// Get stats for admin dashboard
+function getStats() {
+    $conn = getDBConnection();
+    
+    $stats = array();
+    
+    // Total users
+    $stmt = $conn->query("SELECT COUNT(*) as count FROM users WHERE role = 'user'");
+    $result = $stmt->fetch();
+    $stats['total_users'] = $result['count'];
+    
+    // Total posts
+    $stmt = $conn->query("SELECT COUNT(*) as count FROM posts");
+    $result = $stmt->fetch();
+    $stats['total_posts'] = $result['count'];
+    
+    // Pending posts
+    $stmt = $conn->query("SELECT COUNT(*) as count FROM posts WHERE status = 'pending'");
+    $result = $stmt->fetch();
+    $stats['pending_posts'] = $result['count'];
+    
+    // Approved posts
+    $stmt = $conn->query("SELECT COUNT(*) as count FROM posts WHERE status = 'approved'");
+    $result = $stmt->fetch();
+    $stats['approved_posts'] = $result['count'];
+    
+    return $stats;
+}
+
+// Format time ago  
+function timeAgo($datetime) {
+    //Set timezone to Philippines
+    date_default_timezone_set('Asia/Manila');
+    
+    $timestamp = strtotime($datetime);
+    $current = time();
+    $diff = $current - $timestamp;
+    
+    // Handle negative time differences (future dates due to timezone issues)
+    if ($diff < 0) {
+        $diff = abs($diff);
+        // If it's a small negative difference, just show "Just now"
+        if ($diff < 300) { // Less than 5 minutes in the future
+            return "Just now";
+        }
+    }
+    
+    // Show "Just now" for very recent posts
+    if ($diff < 10) {
+        return "Just now";
+    } elseif ($diff < 60) {
+        return $diff . " seconds ago";
+    } elseif ($diff < 3600) {
+        $minutes = floor($diff / 60);
+        return $minutes . ($minutes == 1 ? " minute ago" : " minutes ago");
+    } elseif ($diff < 86400) {
+        $hours = floor($diff / 3600);
+        return $hours . ($hours == 1 ? " hour ago" : " hours ago");
+    } elseif ($diff < 604800) {
+        $days = floor($diff / 86400);
+        return $days . ($days == 1 ? " day ago" : " days ago");
+    } elseif ($diff < 2592000) {
+        $weeks = floor($diff / 604800);
+        return $weeks . ($weeks == 1 ? " week ago" : " weeks ago");
+    } else {
+        return date('M d, Y', $timestamp);
+    }
+}
+
+// ========== COMMENT FUNCTIONS ==========
+
+// Create comment
+function createComment($postId, $userId, $comment) {
+    $conn = getDBConnection();
+    $comment = sanitize($comment);
+    
+    $stmt = $conn->prepare("INSERT INTO comments (post_id, user_id, comment) VALUES (?, ?, ?)");
+    $stmt->execute([$postId, $userId, $comment]);
+    
+    return $stmt->rowCount() > 0;
+}
+
+// Get comments for a post
+function getComments($postId) {
+    $conn = getDBConnection();
+    
+    $stmt = $conn->prepare("SELECT c.*, u.username FROM comments c 
+                           JOIN users u ON c.user_id = u.id 
+                           WHERE c.post_id = ? 
+                           ORDER BY c.created_at DESC");
+    $stmt->execute([$postId]);
+    return $stmt->fetchAll();
+}
+
+// Delete comment
+function deleteComment($commentId, $userId = null, $isAdmin = false) {
+    $conn = getDBConnection();
+    
+    // Get comment to check ownership
+    $stmt = $conn->prepare("SELECT user_id FROM comments WHERE id = ?");
+    $stmt->execute([$commentId]);
+    $comment = $stmt->fetch();
+    
+    if (!$comment) {
+        return false;
+    }
+    
+    // Check permissions - admin can delete any, user can only delete own
+    if (!$isAdmin && $comment['user_id'] != $userId) {
+        return false;
+    }
+    
+    $stmt = $conn->prepare("DELETE FROM comments WHERE id = ?");
+    $stmt->execute([$commentId]);
+    return $stmt->rowCount() > 0;
+}
+
+// Get comment count for a post
+function getCommentCount($postId) {
+    $conn = getDBConnection();
+    
+    $stmt = $conn->prepare("SELECT COUNT(*) as count FROM comments WHERE post_id = ?");
+    $stmt->execute([$postId]);
+    $result = $stmt->fetch();
+    return $result['count'];
+}
